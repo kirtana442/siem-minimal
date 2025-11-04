@@ -1,16 +1,17 @@
 import asyncio
+import sys
 
 async def read_process_output(cmd, process_line):
 
 	proc = await asyncio.create_subprocess_exec(
 		*cmd,
 		stdout=asyncio.subprocess.PIPE,
-		stderr=asyncio.subprocess.PIPE,
-		text=True
+		stderr=asyncio.subprocess.PIPE
 	)
 
-	async for line in proc.stdout:
-		process_line(line.strip())
+	async for raw_line in proc.stdout:
+		line = raw_line.decode('utf-8').strip()
+		process_line(line)
 
 	await proc.wait()
 
@@ -40,7 +41,15 @@ async def main():
 
 if __name__ == "__main__":
 
+	loop = asyncio.new_event_loop()
+	asyncio.set_event_loop(loop)
 	try:
-		asyncio.run(main())
+		loop.run_until_complete(main())
 	except KeyboardInterrupt:
+		for task in asyncio.all_tasks(loop):
+			task.cancel()
+		loop.run_until_complete(asyncio.sleep(0))  # allow cancellation to propagate
 		print("Collector stopped by user")
+	finally:
+		loop.close()
+		sys.exit(0)
