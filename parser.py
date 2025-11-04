@@ -2,7 +2,9 @@ import sqlite3
 import re
 from datetime import datetime, timezone
 
+
 DB_PATH = "data/siem.db"
+
 
 def extract_timestamp(raw_message):
     """
@@ -20,6 +22,7 @@ def extract_timestamp(raw_message):
             pass
     return datetime.now(timezone.utc).timestamp()
 
+
 def parse_raw_log(source, raw_message):
     """
     Parses a raw log line and returns a tuple matching 
@@ -35,10 +38,12 @@ def parse_raw_log(source, raw_message):
     ssh_failed_pattern = r'Failed password for (?P<user>[\w\-]+) from (?P<ip>[\d\.]+)'
     ssh_success_pattern = r'Accepted password for (?P<user>[\w\-]+) from (?P<ip>[\d\.]+)'
     sudo_pattern = r'sudo:(?P<user>[\w\-]+):'
+    sshd_session_pattern = r'session (opened|closed) for user (?P<user>[\w\-]+)'
 
     if source == "ssh":
         failed_match = re.search(ssh_failed_pattern, raw_message)
         success_match = re.search(ssh_success_pattern, raw_message)
+        session_match = re.search(sshd_session_pattern, raw_message)
         if failed_match:
             source_ip = failed_match.group("ip")
             severity = "WARN"
@@ -49,6 +54,13 @@ def parse_raw_log(source, raw_message):
             severity = "INFO"
             log_type = "ssh_auth"
             message = f"Successful SSH login for {success_match.group('user')} from {source_ip}"
+        elif session_match:
+            user = session_match.group('user')
+            action = session_match.group(1)  # "opened" or "closed"
+            severity = "INFO"
+            log_type = "ssh_session"
+            message = f"SSH session {action} for user {user}"
+
     elif source == "sudo":
         sudo_match = re.search(sudo_pattern, raw_message)
         if sudo_match:
@@ -57,6 +69,7 @@ def parse_raw_log(source, raw_message):
             message = f"Sudo command executed by {sudo_match.group('user')}"
 
     return (timestamp, source_ip, log_type, severity, message)
+
 
 def process_raw_logs():
     """
@@ -84,6 +97,7 @@ def process_raw_logs():
     conn.commit()
     conn.close()
     print(f"Processed {processed_count} raw logs.")
+
 
 if __name__ == "__main__":
     process_raw_logs()
