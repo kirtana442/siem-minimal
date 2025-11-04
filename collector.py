@@ -1,55 +1,60 @@
 import asyncio
-import sys
+import sqlite3
+from datetime import datetime
 
-async def read_process_output(cmd, process_line):
+DB_PATH = "data/siem.db"
 
-	proc = await asyncio.create_subprocess_exec(
-		*cmd,
-		stdout=asyncio.subprocess.PIPE,
-		stderr=asyncio.subprocess.PIPE
-	)
+def insert_raw_log(source, raw_message, db_path=DB_PATH):
+    # Use UTC ISO timestamp for flexibility
+    timestamp = datetime.utcnow().isoformat(timespec='seconds')
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO raw_logs (source, timestamp, raw_message)
+        VALUES (?, ?, ?)
+    ''', (source, timestamp, raw_message))
+    conn.commit()
+    conn.close()
 
-	async for raw_line in proc.stdout:
-		line = raw_line.decode('utf-8').strip()
-		process_line(line)
-
-	await proc.wait()
-
-def process_line(line):
-
-	print(f"Log: {line}");
+async def read_process_output(cmd, source):
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    async for raw_line in proc.stdout:
+        line = raw_line.decode('utf-8').strip()
+        insert_raw_log(source, line)
+    await proc.wait()
 
 async def get_ssh_logs():
-
-	cmd = [ "journalctl", "-u", "ssh.service", "--no-pager", "-f", "--since", "now"]
-	await read_process_output(cmd,process_line)
+    cmd = [
+        "journalctl",
+        "-u", "ssh.service",
+        "--no-pager",
+        "-f",
+        "--since", "now"
+    ]
+    await read_process_output(cmd, "ssh")
 
 async def get_sudo_logs():
-
-	cmd = [
-		"journalctl",
-		"-t", "sudo",
-		"--no-pager",
-		"-f",
-		"--since", "now"]
-	await read_process_output(cmd,process_line)
+    cmd = [
+        "journalctl",
+        "-t", "sudo",
+        "--no-pager",
+        "-f",
+        "--since", "now"
+    ]
+    await read_process_output(cmd, "sudo")
 
 async def main():
-	await asyncio.gather(
-		get_ssh_logs(),
-		get_sudo_logs(),)
+    await asyncio.gather(
+        get_ssh_logs(),
+        get_sudo_logs()
+    )
 
 if __name__ == "__main__":
-
-	loop = asyncio.new_event_loop()
-	asyncio.set_event_loop(loop)
-	try:
-		loop.run_until_complete(main())
-	except KeyboardInterrupt:
-		for task in asyncio.all_tasks(loop):
-			task.cancel()
-		loop.run_until_complete(asyncio.sleep(0))  # allow cancellation to propagate
-		print("Collector stopped by user")
-	finally:
-		loop.close()
-		sys.exit(0)
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Collector stopped by user")
