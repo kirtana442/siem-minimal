@@ -58,13 +58,13 @@ config.local.py
 logs/
 
 # Database files (runtime)
-*.db
-*.sqlite
-*.sqlite3
-data/siem.db
+#*.db
+#*.sqlite
+#*.sqlite3
+#data/siem.db
 
 # Alert files (runtime)
-data/alerts.json
+#data/alerts.json
 
 # Temporary files
 *.tmp
