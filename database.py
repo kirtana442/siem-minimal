@@ -66,4 +66,4 @@ def insert_log(raw_log_id, timestamp, source_ip, log_type, severity, message, db
     conn.commit()
     conn.close()
 
-#init_db()
+init_db()

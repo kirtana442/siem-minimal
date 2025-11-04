@@ -2,9 +2,7 @@ import sqlite3
 import re
 from datetime import datetime, timezone
 
-
 DB_PATH = "data/siem.db"
-
 
 def extract_timestamp(raw_message):
     """
@@ -22,53 +20,83 @@ def extract_timestamp(raw_message):
             pass
     return datetime.now(timezone.utc).timestamp()
 
-
 def parse_raw_log(source, raw_message):
-    """
-    Parses a raw log line and returns a tuple matching 
-    the logs table fields (excluding raw):
-    (timestamp, source_ip, log_type, severity, message)
-    """
     timestamp = extract_timestamp(raw_message)
     source_ip = None
     log_type = source
     severity = "INFO"
     message = raw_message
 
-    ssh_failed_pattern = r'Failed password for (?P<user>[\w\-]+) from (?P<ip>[\d\.]+)'
+    ssh_failed_pattern = r'Failed password for (invalid user )?(?P<user>[\w\-]+) from (?P<ip>[\d\.]+)( port (?P<port>\d+))?'
     ssh_success_pattern = r'Accepted password for (?P<user>[\w\-]+) from (?P<ip>[\d\.]+)'
     sudo_pattern = r'sudo:(?P<user>[\w\-]+):'
+    sudo_incorrect_pass_pattern = (
+        r'sudo\[\d+\]:\s+(?P<user>[\w\-]+)\s*:\s*(?P<attempts>\d+)\s+incorrect password attempts\s*; '
+        r'TTY=(?P<tty>[\w\/]+)\s*; PWD=(?P<pwd>[\w\/]+)\s*; USER=(?P<target_user>[\w\-]+)\s*; COMMAND=(?P<command>.+)'
+    )
+    sudo_pam_auth_fail_pattern = (
+        r'pam_unix\(sudo:auth\): authentication failure; .* user=(?P<user>[\w\-]+)'
+    )
     sshd_session_pattern = r'session (opened|closed) for user (?P<user>[\w\-]+)'
+    pam_failure_pattern = r'(pam_unix|pam_winbind)\(sshd:auth\): (check pass; user unknown|pam_get_item returned a password)'
 
     if source == "ssh":
         failed_match = re.search(ssh_failed_pattern, raw_message)
         success_match = re.search(ssh_success_pattern, raw_message)
         session_match = re.search(sshd_session_pattern, raw_message)
+        pam_match = re.search(pam_failure_pattern, raw_message)
+
         if failed_match:
             source_ip = failed_match.group("ip")
             severity = "WARN"
             log_type = "ssh_auth"
-            message = f"Failed SSH login for {failed_match.group('user')} from {source_ip}"
+            user = failed_match.group("user")
+            message = f"Failed SSH login for {user} from {source_ip}"
         elif success_match:
             source_ip = success_match.group("ip")
             severity = "INFO"
             log_type = "ssh_auth"
-            message = f"Successful SSH login for {success_match.group('user')} from {source_ip}"
+            user = success_match.group("user")
+            message = f"Successful SSH login for {user} from {source_ip}"
         elif session_match:
             user = session_match.group('user')
-            action = session_match.group(1)  # "opened" or "closed"
+            action = session_match.group(1)
             severity = "INFO"
             log_type = "ssh_session"
             message = f"SSH session {action} for user {user}"
+        elif pam_match:
+            severity = "WARN"
+            log_type = "ssh_auth"
+            message = f"SSH PAM auth failure: {raw_message}"
 
     elif source == "sudo":
-        sudo_match = re.search(sudo_pattern, raw_message)
-        if sudo_match:
-            severity = "HIGH"
+        incorrect_pass_match = re.search(sudo_incorrect_pass_pattern, raw_message)
+        pam_auth_fail_match = re.search(sudo_pam_auth_fail_pattern, raw_message)
+
+        if incorrect_pass_match:
+            severity = "WARN"
             log_type = "sudo"
-            message = f"Sudo command executed by {sudo_match.group('user')}"
+            user = incorrect_pass_match.group("user")
+            attempts = incorrect_pass_match.group("attempts")
+            target_user = incorrect_pass_match.group("target_user")
+            command = incorrect_pass_match.group("command").strip()
+            message = (f"Sudo incorrect password attempts by {user} ({attempts} attempts) "
+                       f"to run command '{command}' as {target_user}")
+        elif pam_auth_fail_match:
+            severity = "WARN"
+            log_type = "sudo"
+            user = pam_auth_fail_match.group("user")
+            message = f"Sudo PAM authentication failure for user {user}"
+        else:
+            sudo_match = re.search(sudo_pattern, raw_message)
+            if sudo_match:
+                severity = "HIGH"
+                log_type = "sudo"
+                user = sudo_match.group("user")
+                message = f"Sudo command executed by {user}"
 
     return (timestamp, source_ip, log_type, severity, message)
+
 
 
 def process_raw_logs():
